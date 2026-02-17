@@ -27,3 +27,4 @@ for i in range(count):
 print(f"最终参数为: w0 = {w[0]}, w1 = {w[1]}, w2 = {w[2]}")
 
 
+
