@@ -65,4 +65,5 @@ dataloader = DataLoader(dataset, batch_size=8, shuffle=True, collate_fn=Translat
 for src,trg, _, _ in dataloader:                      # 遍历DataLoader中的数据，获取每个批次的英文和中文句子批次
     print(src.shape, trg.shape)                       # 输出每个批次的英文和中文句子批次的形状
     print(src,trg)                                    # 输出每个批次的英文和中文句子批次的内容
+
     break                                             # 只查看第一个批次的数据，之后退出循环
