@@ -2,10 +2,10 @@ import sacrebleu
 from LSTM_eval import translate_sentence
 
 # 读取验证集的英文原文和中文参考
-with open('data/en2cn/valid_en.txt', 'r', encoding='utf-8') as f:
+with open('14RNN_lstm/en2cn/valid_en.txt', 'r', encoding='utf-8') as f:
     src_sentences = [line.strip() for line in f.readlines()]
 
-with open('data/en2cn/valid_zh.txt', 'r', encoding='utf-8') as f:
+with open('14RNN_lstm/en2cn/valid_zh.txt', 'r', encoding='utf-8') as f:
     ref_sentences = [line.strip() for line in f.readlines()]
 
 # 检查长度是否匹配
@@ -24,3 +24,8 @@ bleu = sacrebleu.corpus_bleu(hypotheses, [ref_sentences], tokenize='zh')
 
 print("\n========== BLEU Evaluation Result ==========")
 print(f"BLEU Score: {bleu.score:.2f}")
+
+# 受限于配置，以下为截取前100000条数据，5个epochs的结果
+# ========== BLEU Evaluation Result ==========
+# BLEU Score: 3.33
+# 可以表明代码逻辑正确，实际训练时可以使用全部数据，并且训练更多的epoch以获得更好的翻译质量和更高的BLEU分数。
