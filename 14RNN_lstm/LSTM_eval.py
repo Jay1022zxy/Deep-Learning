@@ -5,9 +5,9 @@ from LSTM import Encoder, Decoder, Seq2Seq, Attention
 
 # 1 加载 tokenizer
 sp_en = spm.SentencePieceProcessor()
-sp_en.load('14RNN_lstm/en2cn/spm_en.model')
+sp_en.load('14RNN_lstm/en2cn/en_bpe.model')
 sp_zh = spm.SentencePieceProcessor()
-sp_zh.load('14RNN_lstm/en2cn/spm_zh.model')
+sp_zh.load('14RNN_lstm/en2cn/zh_bpe.model')
 PAD_ID = sp_en.pad_id()  # Padding token ID
 BOS_ID = sp_en.bos_id()  # Beginning of Sequence token ID
 EOS_ID = sp_en.eos_id()  # End of Sequence token ID
@@ -20,25 +20,26 @@ OUTPUT_DIM = sp_zh.get_piece_size()  # 中文词表大小
 ENC_EMB_DIM = 256                    # 编码器词嵌入维度 (必须和训练时保持一致)
 DEC_EMB_DIM = 256                    # 解码器词嵌入维度
 HID_DIM = 256                        # LSTM隐藏状态维度
-N_LAYERS = 3
+N_LAYERS = 2                         # LSTM层数
 
 attention = Attention(HID_DIM).to(DEVICE)
 encoder = Encoder(INPUT_DIM, ENC_EMB_DIM, HID_DIM, N_LAYERS).to(DEVICE)
-decoder = Decoder(OUTPUT_DIM, DEC_EMB_DIM, HID_DIM, N_LAYERS,attention).to(DEVICE)
+decoder = Decoder(OUTPUT_DIM, DEC_EMB_DIM, HID_DIM,attention,N_LAYERS).to(DEVICE)
 model = Seq2Seq(encoder, decoder, DEVICE).to(DEVICE)
-model.load_state_dict(torch.load('14RNN_lstm/en2cn/seq2seq_attention.pth', map_location=DEVICE))  # 加载训练好的模型参数
+model.load_state_dict(torch.load('14RNN_lstm/seq2seq_bpe_attention.pt', map_location=DEVICE))  # 加载训练好的模型参数
+
 model.eval()  # 设置模型为评估模式
 
 # 3 翻译方法
 def translate_sentence(sentence,  max_len=100):
     # 将输入句子编码为token ID列表，并添加<bos>和<eos>标记
     tokens = [BOS_ID] + sp_en.encode(sentence,out_type=int) + [EOS_ID]   # 将输入句子编码为token ID列表，并在前后添加<bos>和<eos>标记
-    src_tensor = torch.LongTensor(tokens).unsqueeze(0).to(DEVICE)        # 将token ID列表转换为tensor，并添加batch维度
+    src_tensor = torch.LongTensor(tokens).unsqueeze(1).to(DEVICE)        # 将token ID列表转换为tensor，并添加batch维度
     src_len = [len(tokens)]                                              # 计算输入句子的长度，并转换为tensor
 
     # 调用Encoder获取编码器输出和初始隐状态
     with torch.no_grad():
-        encoder_outputs, hidden = model.encoder(src_tensor, src_len)
+        encoder_outputs, hidden, cell = model.encoder(src_tensor, src_len)
 
     # 第一个输入token，序列上是<bos>标记
     trg_indexes = [BOS_ID]
@@ -47,8 +48,8 @@ def translate_sentence(sentence,  max_len=100):
         # 最新生成的token ID作为Decoder的输入，获取下一个token的预测结果和新的隐状态
         trg_tensor = torch.LongTensor([trg_indexes[-1]]).to(DEVICE)  # 获取当前输入token的ID，并转换为tensor
         with torch.no_grad():
-            output, hidden, _ = model.decoder(trg_tensor, hidden, encoder_outputs,    # 调用Decoder获取下一个token的预测结果和新的隐状态，
-                                              (src_tensor !=PAD_ID).permute(1, 0))    # 传入当前输入token、上一时刻的隐状态、编码器输出和源序列的mask
+            output, hidden, cell, _ = model.decoder(trg_tensor, hidden, cell, encoder_outputs, # 调用Decoder获取下一个token的预测结果和新的隐状态，
+                                              (src_tensor !=PAD_ID).permute(1, 0))       # 传入当前输入token、上一时刻的隐状态、编码器输出和源序列的mask
 
        # 获取预测结果中概率最高的token ID，并添加到生成的token列表中
         pred_token_id = output.argmax(1).item()    # 获取预测结果中概率最高的token ID
@@ -68,3 +69,15 @@ if __name__ == "__main__":
             break
         translation = translate_sentence(src_sentence)  # 调用翻译方法获取翻译结果
         print(f"翻译结果：{translation}")  # 输出翻译结果
+
+# 受限于配置，以下为截取前100000条数据，5个epochs的结果
+# 请输入英文句子进行翻译（输入exit退出）：hello
+# 翻译结果：奶
+# 请输入英文句子进行翻译（输入exit退出）：nice to meet you
+# 翻译结果：一会儿再找你
+# 请输入英文句子进行翻译（输入exit退出）：I come from wuhan
+# 翻译结果：一股社会的演讲
+# 请输入英文句子进行翻译（输入exit退出）：what can i say
+# 翻译结果：一看就是怎
+
+# 表明代码逻辑正确，实际训练时可以使用全部数据，并且训练更多的epoch以获得更好的翻译质量。
