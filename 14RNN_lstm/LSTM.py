@@ -32,7 +32,7 @@ EOS_ID = sp_en.eos_id()  # 3
 
 # 2. Dataset & DataLoader
 class TranslationDataset(Dataset):
-    ## 初始化方法，读取英文和中文训练文本。然后给每个句子前后增加<bos>和<eos>。 为了防止训练时显存不足，对于长度超过限制的句子进行过滤。
+    # 初始化方法，读取英文和中文训练文本。然后给每个句子前后增加<bos>和<eos>。 为了防止训练时显存不足，对于长度超过限制的句子进行过滤。
     def __init__(self, src_file, trg_file, src_tokenizer, trg_tokenizer, max_len=100):
         with open(src_file, encoding='utf-8') as f:
             src_lines = f.read().splitlines()
@@ -49,7 +49,7 @@ class TranslationDataset(Dataset):
             trg_ids = [BOS_ID] + self.trg_tokenizer(trg) + [EOS_ID]
             # 只保留输入和输出序列token数同时小于max_len的训练样本。
             if len(src_ids) <= max_len and len(trg_ids) <= max_len:
-                self.pairs.append((src_ids, trg_ids))  # <-- 直接保存token id序列
+                self.pairs.append((src_ids, trg_ids))         # <-- 直接保存token id序列
 
     def __len__(self):                  # 返回数据集中句子对的数量
         return len(self.pairs)
@@ -58,12 +58,17 @@ class TranslationDataset(Dataset):
         src_ids, trg_ids = self.pairs[idx]
         return torch.LongTensor(src_ids), torch.LongTensor(trg_ids)
 
-    ## 对一个batch的输入和输出token序列，依照最长的序列长度，用<pad> token进行填充，确保一个batch的数据形状一致，组成一个tensor。
+    # 对一个batch的输入和输出token序列，依照最长的序列长度，用<pad> token进行填充，确保一个batch的数据形状一致，组成一个tensor。
     @staticmethod
     def collate_fn(batch):
-        src_batch, trg_batch = zip(*batch)
+        # batch是一个列表，列表的每个元素是一个tuple，包含一个英文token ID序列和一个中文token ID序列。
+        # zip(*batch)可以将这个列表解压成两个列表：一个是所有英文token ID序列的列表，一个是所有中文token ID序列的列表。
+        src_batch, trg_batch = zip(*batch)  
+        # 计算每个序列的长度，后续在Encoder中使用pack_padded_sequence函数时需要提供这些长度信息，以便正确处理填充部分。  
         src_lens = [len(x) for x in src_batch]
         trg_lens = [len(x) for x in trg_batch]
+        # 使用torch.nn.utils.rnn.pad_sequence函数对英文和中文token ID序列进行填充。
+        # 这个函数会将一个列表中的多个不同长度的序列填充到相同的长度，形成一个新的tensor。padding_value参数指定了用于填充的token ID，这里使用PAD_ID。
         src_pad = nn.utils.rnn.pad_sequence(src_batch, padding_value=PAD_ID)
         trg_pad = nn.utils.rnn.pad_sequence(trg_batch, padding_value=PAD_ID)
         return src_pad, trg_pad, src_lens, trg_lens
@@ -83,15 +88,16 @@ class Attention(nn.Module):
         # 调整encoder各个时间步输出隐状态的维度： [src_len, batch, hid_dim*2] -> [batch, src_len, hid_dim*2]
         encoder_outputs = encoder_outputs.permute(1, 0, 2)
 
-        src_len = encoder_outputs.shape[1]
+        src_len = encoder_outputs.shape[1]     
         # 中文当前一个token需要和英文所有token计算注意力。所以需要把中文token的状态复制多份，以便进行统一拼接。
-        # 因为Decoder只有当前时间步输入的隐状态，复制到和Encoder输出隐状态同样的src_len。
-        hidden = hidden.repeat(1, src_len, 1)  # [batch, src_len, hid_dim]
+        # 因为Decoder只有当前时间步输入的隐状态，而Encoder在各个时间步都有输出的隐状态，所以需要把Decoder当前输入的隐状态复制src_len份，
+        # hidden的维度从[batch, 1, hid_dim]变为[batch, src_len, hid_dim]，这样就可以和encoder_outputs的维度[batch, src_len, hid_dim*2]进行拼接了。
+        hidden = hidden.repeat(1, src_len, 1)  # [batch, src_len, hid_dim] 
 
         # 拼接Decoder当前输入的隐状态和Encoder在各个时间步输出的隐状态，然后经过一个线性层，tanh激活。
         energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))  # [batch, src_len, hid_dim]
         # 输出Decoder当前中文token与所有英文token的注意力值。
-        attention = self.v(energy).squeeze(2)  # [batch, src_len]
+        attention = self.v(energy).squeeze(2)  # [batch, src_len]，squeeze掉最后一个维度，得到每个英文token的注意力值。
         # mask标志哪些位置为<pad>,对于填充的位置，注意力值为一个大的负值。这样经过softmax就为0。
         attention = attention.masked_fill(mask == 0, -1e10)
         # 利用softmax将注意力的值归一化。让生成当前中文token对输入的英文各个token的注意力之和为1。
@@ -132,7 +138,8 @@ class Encoder(nn.Module):
         final_cell = []
 
         for layer in range(self.n_layers):
-            # 对LSTM每一层最后一个时间步，将隐状态的正向和反向状态合并，细胞状态的正向和反向状态合并，分别通过一个线性层将维度从hid_dim*2降低为hid_dim维度。
+            # 对LSTM每一层最后一个时间步，将隐状态的正向和反向状态合并，细胞状态的正向和反向状态合并，
+            # 分别通过一个线性层将维度从hid_dim*2降低为hid_dim维度。
             h_cat = torch.cat((hidden[layer][-2], hidden[layer][-1]), dim=1)
             c_cat = torch.cat((cell[layer][-2], cell[layer][-1]), dim=1)
             h_layer = torch.tanh(self.fc_hidden[layer](h_cat)).unsqueeze(0)
@@ -236,8 +243,7 @@ def train(model, iterator, optimizer, criterion):
         loss = criterion(output, trg)
 
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1) # 梯度裁剪，防止梯度爆炸
-        
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)      # 梯度裁剪，防止梯度爆炸
         optimizer.step()
 
         # 更新损失统计
@@ -263,28 +269,41 @@ if __name__ == '__main__':
     dataset = TranslationDataset('14RNN_lstm/en2cn/train_en.txt', '14RNN_lstm/en2cn/train_zh.txt', tokenize_en, tokenize_cn)
     loader = DataLoader(dataset, batch_size=8, shuffle=True, collate_fn=TranslationDataset.collate_fn)
 
+    # 因电脑配置，将训练数据截断到100000条，训练5个epoch。实际训练时可以使用全部数据，并且训练更多的epoch。
+    dataset.pairs = dataset.pairs[:100000]      # 截断数据到100000条
+
     INPUT_DIM = sp_en.get_piece_size()
     OUTPUT_DIM = sp_cn.get_piece_size()
-    ENC_EMB_DIM = 256
-    DEC_EMB_DIM = 256
+    ENC_EMB_DIM = 256            # ENCODER的embedding维度
+    DEC_EMB_DIM = 256            # DECODER的embedding维度
     HID_DIM = 256
     
     attention = Attention(HID_DIM).to(device)
     encoder = Encoder(INPUT_DIM, ENC_EMB_DIM, HID_DIM).to(device)
     decoder = Decoder(OUTPUT_DIM, DEC_EMB_DIM, HID_DIM, attention, n_layers=encoder.n_layers).to(device)
     model = Seq2Seq(encoder, decoder, device).to(device)
-    ckpt_path = '14RNN_lstm/seq2seq_bpe_attention.pt'
+    ckpt_path = '14RNN_lstm/seq2seq_bpe_attention.pt'    # 模型参数保存路径
     if os.path.exists(ckpt_path):
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
         print("模型已加载")
     else:
         print("没有找到模型，从头训练")
-    optimizer = optim.Adam(model.parameters())
+
+    optimizer = optim.Adam(model.parameters())     # 使用Adam优化器，适合训练RNN模型。默认学习率为0.001，可以根据需要调整。
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_ID)
 
-    N_EPOCHS = 1
+    N_EPOCHS = 5
 
     for epoch in range(N_EPOCHS):
         loss = train(model, loader, optimizer, criterion)
         print(f'Epoch {epoch + 1}/{N_EPOCHS} | Loss: {loss:.4f}')
         torch.save(model.state_dict(), ckpt_path)                    # 每个epoch结束后保存模型参数
+
+# 因配置限制，以下为截取前100000条数据训练5个epoch的结果，实际训练时可以使用全部数据，并且训练更多的epoch。
+# Epoch 1/5 | Loss: 5.1267
+# Epoch 2/5 | Loss: 4.0113
+# Epoch 3/5 | Loss: 3.3034
+# Epoch 4/5 | Loss: 2.7824
+# Epoch 5/5 | Loss: 2.4012
+# 注意到在最后一个epoch训练中，loss在逐渐升高，很可能是默认学习率0.001对于这个模型来说过大了，导致训练不稳定。
+# 实际训练时可以尝试调整学习率，或者使用学习率调度器来逐渐降低学习率，以获得更稳定的训练过程和更好的结果。
